@@ -124,9 +124,22 @@ export class WhatsAppPlatform {
       logger.error("WhatsApp auth failed", { msg });
     });
 
-    client.on("message", async (msg: { from: string; body: string; fromMe: boolean }) => {
-      if (msg.fromMe) return; // Ignore own messages
+    // Track recently sent messages to avoid reacting to bot's own replies
+    const recentBotReplies = new Set<string>();
+    const botSend = async (to: string, text: string) => {
+      recentBotReplies.add(text.slice(0, 100));
+      // Auto-expire after 10s to prevent memory leak
+      setTimeout(() => recentBotReplies.delete(text.slice(0, 100)), 10_000);
+      await client.sendMessage(to, text);
+    };
+
+    client.on("message_create", async (msg: { from: string; to: string; body: string; fromMe: boolean; id: { _serialized: string } }) => {
+      // Skip messages with no body or internal markers
       if (!msg.body || msg.body.startsWith("_pepagi_")) return;
+      // If this is a bot reply we just sent, remember it and skip
+      if (msg.fromMe && recentBotReplies.delete(msg.body.slice(0, 100))) return;
+      // For non-self messages, skip own outgoing messages
+      if (msg.fromMe && msg.from !== msg.to) return;
 
       const from = msg.from;
 
@@ -141,19 +154,19 @@ export class WhatsAppPlatform {
       // Handle commands
       if (userMessage.toLowerCase() === "/start" || userMessage.toLowerCase() === "start") {
         this.conversations.delete(from);
-        await client.sendMessage(from, this.welcomeMessage);
+        await botSend(from, this.welcomeMessage);
         return;
       }
       if (userMessage.toLowerCase() === "/clear") {
         this.conversations.delete(from);
         // QUAL-04: also clear persistent ConversationMemory for this user
         await this.conversationMemory.clearHistory(from, "whatsapp");
-        await client.sendMessage(from, "🧹 Konverzace vymazána.");
+        await botSend(from, "🧹 Konverzace vymazána.");
         return;
       }
       if (userMessage.toLowerCase() === "/status") {
         const stats = this.taskStore.getStats();
-        await client.sendMessage(from,
+        await botSend(from,
           `📊 PEPAGI Status\nÚlohy: ${stats.total} | ✓ ${stats.completed} | ✗ ${stats.failed} | ⏳ ${stats.running}`
         );
         return;
@@ -190,17 +203,17 @@ export class WhatsAppPlatform {
 
         // WhatsApp has no strict char limit but split at 4000 to be safe
         if (result.length <= 4000) {
-          await client.sendMessage(from, result);
+          await botSend(from, result);
         } else {
           const chunks = result.match(/.{1,4000}/gs) ?? [result];
           for (const chunk of chunks) {
-            await client.sendMessage(from, chunk);
+            await botSend(from, chunk);
           }
         }
       } catch (err) {
         // SEC-12: log full error internally, send only a generic message to the user
         logger.error("WhatsApp task failed", { error: err instanceof Error ? err.message : String(err) });
-        await client.sendMessage(from, "Nastala interní chyba. Zkuste to prosím znovu.");
+        await botSend(from, "Nastala interní chyba. Zkuste to prosím znovu.");
       }
     });
 
