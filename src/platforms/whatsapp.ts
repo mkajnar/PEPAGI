@@ -106,9 +106,8 @@ export class WhatsAppPlatform {
 
     client.on("qr", (qr: string) => {
       logger.info("WhatsApp — naskenuj QR kód svým telefonem");
-      qrcodeTerminal.generate(qr, { small: true });
-      logger.info("Nebo otevři WhatsApp → Propojená zařízení → Přidat zařízení");
       eventBus.emit({ type: "platform:qr", platform: "whatsapp", qr });
+      qrcodeTerminal.generate(qr, { small: true });
     });
 
     client.on("authenticated", () => {
