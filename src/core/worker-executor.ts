@@ -221,7 +221,8 @@ export class WorkerExecutor {
 
       // Claude runs in agentic mode with real tools; others (GPT, Gemini, Ollama) are text-only.
       const useAgenticMode = agent === "claude";
-      const systemPrompt = buildWorkerSystemPrompt(task.title, AGENT_STRENGTHS[agent] ?? "Custom OpenAI-compatible provider", useAgenticMode, this.profile);
+      const agentStrength = AGENT_STRENGTHS[agent] ?? agentProfile.displayName ?? "Custom OpenAI-compatible provider";
+      const systemPrompt = buildWorkerSystemPrompt(task.title, agentStrength, useAgenticMode, this.profile);
 
       try {
         logger.info(`executeWorkerTask: calling LLM`, { taskId: task.id, agent, model: agentProfile.model, agenticMode: useAgenticMode, agenticMaxTurns, maxTokens, timeoutSec: timeoutMs / 1000 });
@@ -292,17 +293,23 @@ export class WorkerExecutor {
         const statusCode = isLLMError ? err.statusCode : 0;
         const msg = err instanceof Error ? err.message : String(err);
 
-        // Rate limit (429) or auth error (401) → try next agent in chain
-        if (isLLMError && (statusCode === 429 || statusCode === 401)) {
-          const reason = statusCode === 429 ? "rate-limited" : "auth failed (no API key?)";
-          logger.warn(`${agent} ${reason}, switching to next agent`, { taskId: task.id, status: statusCode });
+        // Any LLMProviderError → try next agent in fallback chain.
+        // This covers: 429 (rate limit), 401 (auth/no key), spawn failures (status 0),
+        // connection errors, timeouts, and other transient provider issues.
+        // Only non-LLM errors (security blocks, etc.) cause immediate failure.
+        if (isLLMError) {
+          const reason = statusCode === 429 ? "rate-limited"
+            : statusCode === 401 ? "auth failed (no API key?)"
+            : statusCode === 0 ? "connection/spawn failed"
+            : `error ${statusCode}`;
+          logger.warn(`${agent} ${reason}, switching to next agent`, { taskId: task.id, status: statusCode, error: msg.slice(0, 200) });
           eventBus.emit({ type: "mediator:thinking", taskId: task.id, thought: `${agent} ${reason} — trying next agent...` });
           if (statusCode === 429) this.pool.markRateLimited(agent);
           continue;
         }
 
-        // Any other error → fail immediately
-        logger.error(`Worker execution failed`, { taskId: task.id, agent, error: msg });
+        // Non-LLM error (security, internal) → fail immediately
+        logger.error(`Worker execution failed (non-LLM error)`, { taskId: task.id, agent, error: msg });
         eventBus.emit({ type: "mediator:thinking", taskId: task.id, thought: `Worker ${agent} failed: ${msg.slice(0, 120)}` });
         return { success: false, result: null, summary: `Task failed: ${msg}`, artifacts: [], confidence: 0 };
       }

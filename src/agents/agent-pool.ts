@@ -262,11 +262,15 @@ export class AgentPool {
   }
 
   getFallbackChain(preferred: AgentProvider): AgentProvider[] {
-    const order: AgentProvider[] = [preferred, "gpt", "gemini", "claude", "ollama", "lmstudio"];
-    // Append custom providers to the end of the fallback chain
+    // Smart fallback order: preferred → custom providers → built-in providers.
+    // Custom providers come first because they're explicitly configured by the user
+    // and are more likely to work than built-in providers without API keys.
+    const builtIn: AgentProvider[] = ["claude", "gpt", "gemini", "ollama", "lmstudio"];
+    const customNames: AgentProvider[] = [];
     for (const [name] of this.agents) {
-      if (!order.includes(name)) order.push(name);
+      if (!builtIn.includes(name)) customNames.push(name);
     }
+    const order: AgentProvider[] = [preferred, ...customNames, ...builtIn];
     const seen = new Set<AgentProvider>();
     const chain: AgentProvider[] = [];
     for (const p of order) {

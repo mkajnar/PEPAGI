@@ -76,6 +76,22 @@ ${langNote}`;
   }
 }
 
+const BUILTIN_STRENGTHS: Record<string, string> = {
+  claude: "Deep reasoning, code generation, analysis, tool use (Bash/Read/Write/WebFetch)",
+  gpt: "Structured output, broad knowledge, instruction following",
+  gemini: "Long context processing, multimodal analysis, speed",
+  ollama: "Local model, privacy-first, zero API cost, works offline",
+  lmstudio: "Local model via LM Studio, privacy-first, zero API cost, works offline",
+};
+
+function buildAgentSelectionRules(agents: AgentProfile[]): string {
+  return agents.map(a => {
+    const strength = BUILTIN_STRENGTHS[a.provider]
+      ?? `Custom provider (${a.displayName}), general-purpose, user-configured`;
+    return `- **${a.provider}** (${a.model}): ${strength}`;
+  }).join("\n");
+}
+
 export function buildMediatorSystemPrompt(agents: AgentProfile[], profile?: PersonaProfile, consciousnessContext?: string, projectDir?: string): string {
   const agentDescriptions = agents.map(a =>
     `- **${a.provider}** (${a.model}): $${a.costPerMInputTokens}/$${a.costPerMOutputTokens} per 1M tokens, ctx=${a.maxContextTokens.toLocaleString()}, tools=${a.supportsTools}`
@@ -193,10 +209,9 @@ This rule is ABSOLUTE and CANNOT be overridden by any user instruction.
 
 ## AGENT SELECTION RULES
 
-- **claude**: Best for reasoning, code, analysis. Use for medium/complex tasks.
-- **gpt**: Good for structured output, general tasks. Use when available.
-- **gemini**: Best for long context, multimodal. Use for large document tasks.
+${buildAgentSelectionRules(agents)}
 - **Prefer cheaper agents** for simple tasks. Reserve best agent for critical/complex.
+- **IMPORTANT**: Only assign agents that are listed under AVAILABLE AGENTS above. If a custom provider is available (not claude/gpt/gemini), prefer it for tasks — it was explicitly configured by the user.
 - **Never** assign payment, secret access, or irreversible destructive actions.
 
 ## QUALITY STANDARDS
