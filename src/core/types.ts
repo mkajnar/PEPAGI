@@ -121,7 +121,9 @@ export type PepagiEvent =
   // Self-healing events (L3 AI Emergency Recovery)
   | { type: "self-heal:attempt"; tier: number; diagnosis: string; taskId?: string }
   | { type: "self-heal:success"; tier: number; action: string }
-  | { type: "self-heal:failed"; tier: number; reason: string };
+  | { type: "self-heal:failed"; tier: number; reason: string }
+  // Platform connection status
+  | { type: "platform:status"; platform: "telegram" | "whatsapp" | "discord" | "imessage"; connected: boolean };
 
 // ─── Mediator Decision ───────────────────────────────────────
 export interface MediatorDecision {

@@ -75,23 +75,22 @@ export class WhatsAppPlatform {
   async start(): Promise<void> {
     logger.info("Starting WhatsApp platform...");
 
-    // Dynamic import — whatsapp-web.js is optional
-    let WWebJS: {
-      Client: new (opts: unknown) => unknown;
-      LocalAuth: new (opts?: unknown) => unknown;
-    };
+    // Dynamic import — whatsapp-web.js is optional (CJS module, exports on .default)
+    let Client: new (opts: unknown) => unknown;
+    let LocalAuth: new (opts?: unknown) => unknown;
     let qrcodeTerminal: { generate: (qr: string, opts: unknown) => void };
 
     try {
-      WWebJS = await import("whatsapp-web.js") as typeof WWebJS;
+      const wwMod = await import("whatsapp-web.js");
+      const ww = wwMod.default ?? wwMod;
+      Client = (ww as Record<string, unknown>).Client as typeof Client;
+      LocalAuth = (ww as Record<string, unknown>).LocalAuth as typeof LocalAuth;
       qrcodeTerminal = await import("qrcode-terminal") as typeof qrcodeTerminal;
     } catch {
       throw new Error(
         "WhatsApp dependencies missing. Run: npm install whatsapp-web.js qrcode-terminal"
       );
     }
-
-    const { Client, LocalAuth } = WWebJS;
 
     this.client = new Client({
       authStrategy: new LocalAuth({ dataPath: this.sessionPath }),
