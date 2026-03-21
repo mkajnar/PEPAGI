@@ -404,7 +404,9 @@ function renderPlatforms(platforms) {
     { field: 'allowedNumbers', label: 'Allowed Numbers', type: 'text', value: (wa.allowedNumbers || []).join(', '), placeholder: '+420123456789' },
     { field: 'sessionPath', label: 'Session Path', type: 'text', value: wa.sessionPath || '' },
     { field: 'welcomeMessage', label: 'Welcome Message', type: 'textarea', value: wa.welcomeMessage || '' },
-  ]));
+  ], `<div class="form-group full-width" style="margin-top:8px">
+      <button class="btn-test" id="btn-wa-qr" onclick="openWhatsAppQR()">📱 Show QR Code</button>
+    </div>`));
 
   // Discord
   const dc = platforms.discord || {};
@@ -425,7 +427,7 @@ function renderPlatforms(platforms) {
   grid.innerHTML = cards.join('');
 }
 
-function platformCard(name, data, fields) {
+function platformCard(name, data, fields, extraHtml) {
   const icon = PLATFORM_ICONS[name] || '';
   const fieldsHtml = fields.map(f => {
     if (f.type === 'textarea') {
@@ -452,6 +454,7 @@ function platformCard(name, data, fields) {
     </div>
     <div class="form-grid" style="gap:10px">
       ${fieldsHtml}
+      ${extraHtml || ''}
     </div>
   </div>`;
 }
@@ -683,6 +686,124 @@ function escapeAttr(s) {
   if (!s) return '';
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// ── WhatsApp QR Code ─────────────────────────────────────────
+
+/** @type {Window|null} */
+let _qrWindow = null;
+
+/** @type {WebSocket|null} */
+let _qrWs = null;
+
+function openWhatsAppQR() {
+  // Open popup window
+  if (_qrWindow && !_qrWindow.closed) {
+    _qrWindow.focus();
+    return;
+  }
+
+  _qrWindow = window.open('', 'pepagi-wa-qr', 'width=420,height=520,resizable=yes');
+  if (!_qrWindow) { alert('Popup blocked — allow popups for this site.'); return; }
+
+  _qrWindow.document.write(`<!DOCTYPE html>
+<html><head><title>WhatsApp QR</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1/build/qrcode.min.js"><\/script>
+<style>
+  body { background: #1a1a2e; color: #e0e0e0; font-family: system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100vh; margin: 0; }
+  h2 { font-size: 18px; margin-bottom: 8px; }
+  p { font-size: 13px; color: #888; margin: 4px 0 16px; }
+  #qr-canvas { background: #fff; padding: 16px; border-radius: 12px; }
+  .status { margin-top: 16px; font-size: 14px; }
+  .connected { color: #4ade80; }
+  .waiting { color: #fbbf24; }
+</style></head><body>
+  <h2>📱 WhatsApp QR Code</h2>
+  <p>Scan with WhatsApp → Linked Devices → Link a Device</p>
+  <canvas id="qr-canvas"></canvas>
+  <div class="status waiting" id="qr-status">⏳ Waiting for QR code...</div>
+</body></html>`);
+  _qrWindow.document.close();
+
+  // Connect WebSocket to receive QR updates
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = proto + '://' + location.host + '/ws';
+
+  if (_qrWs) { try { _qrWs.close(); } catch {} }
+  _qrWs = new WebSocket(wsUrl);
+
+  _qrWs.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      // Check init/state for existing QR
+      if (msg.type === 'init' || msg.type === 'state') {
+        const qr = msg.state?.platforms?.whatsapp?.qrCode;
+        const connected = msg.state?.platforms?.whatsapp?.connected;
+        if (connected) {
+          showQRConnected();
+        } else if (qr) {
+          renderQR(qr);
+        }
+      }
+      // Check live events
+      if (msg.type === 'event' && msg.event?.eventType === 'platform:qr') {
+        // QR data is in state, re-fetch via next state broadcast
+      }
+      // State updates carry QR
+      if (msg.type === 'state') {
+        const qr = msg.state?.platforms?.whatsapp?.qrCode;
+        const connected = msg.state?.platforms?.whatsapp?.connected;
+        if (connected) {
+          showQRConnected();
+        } else if (qr) {
+          renderQR(qr);
+        }
+      }
+    } catch {}
+  };
+
+  // Also check current state via REST
+  fetch('/api/state').then(r => r.json()).then(state => {
+    const wa = state.platforms?.whatsapp;
+    if (wa?.connected) showQRConnected();
+    else if (wa?.qrCode) renderQR(wa.qrCode);
+  }).catch(() => {});
+
+  _qrWindow.addEventListener('beforeunload', () => {
+    if (_qrWs) { try { _qrWs.close(); } catch {} _qrWs = null; }
+  });
+}
+
+function renderQR(qrData) {
+  if (!_qrWindow || _qrWindow.closed) return;
+  const canvas = _qrWindow.document.getElementById('qr-canvas');
+  const status = _qrWindow.document.getElementById('qr-status');
+  if (!canvas) return;
+
+  // Use QRCode library loaded in popup
+  const QRCode = _qrWindow.QRCode;
+  if (QRCode) {
+    QRCode.toCanvas(canvas, qrData, { width: 300, margin: 2, color: { dark: '#000', light: '#fff' } }, (err) => {
+      if (err) { status.textContent = '❌ QR render error'; status.className = 'status'; }
+      else { status.textContent = '📲 Scan this QR code now!'; status.className = 'status waiting'; }
+    });
+  } else {
+    status.textContent = '❌ QR library not loaded';
+  }
+}
+
+function showQRConnected() {
+  if (!_qrWindow || _qrWindow.closed) return;
+  const status = _qrWindow.document.getElementById('qr-status');
+  if (status) {
+    status.textContent = '✅ WhatsApp connected!';
+    status.className = 'status connected';
+  }
+}
+
+// Expose globally for onclick
+window.openWhatsAppQR = openWhatsAppQR;
 
 // ── Init ─────────────────────────────────────────────────────
 

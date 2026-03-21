@@ -123,7 +123,8 @@ export type PepagiEvent =
   | { type: "self-heal:success"; tier: number; action: string }
   | { type: "self-heal:failed"; tier: number; reason: string }
   // Platform connection status
-  | { type: "platform:status"; platform: "telegram" | "whatsapp" | "discord" | "imessage"; connected: boolean };
+  | { type: "platform:status"; platform: "telegram" | "whatsapp" | "discord" | "imessage"; connected: boolean }
+  | { type: "platform:qr"; platform: "whatsapp"; qr: string };
 
 // ─── Mediator Decision ───────────────────────────────────────
 export interface MediatorDecision {

@@ -6,6 +6,7 @@
 // This is an unofficial WhatsApp Web client. Use responsibly.
 
 import { Logger } from "../core/logger.js";
+import { eventBus } from "../core/event-bus.js";
 import type { Mediator } from "../core/mediator.js";
 import type { TaskStore } from "../core/task-store.js";
 import { ConversationMemory } from "../memory/conversation-memory.js";
@@ -104,10 +105,10 @@ export class WhatsAppPlatform {
     const client = this.client as any;
 
     client.on("qr", (qr: string) => {
-      // AUDIT: use logger instead of console.log
       logger.info("WhatsApp — naskenuj QR kód svým telefonem");
       qrcodeTerminal.generate(qr, { small: true });
       logger.info("Nebo otevři WhatsApp → Propojená zařízení → Přidat zařízení");
+      eventBus.emit({ type: "platform:qr", platform: "whatsapp", qr });
     });
 
     client.on("authenticated", () => {
