@@ -312,40 +312,46 @@ const githubTool: Tool = {
       pr_status: `gh pr status${repoFlag} --json`,
     };
 
+    // SECURITY: Sanitize shell arguments using single-quotes to prevent
+    // command injection via $(), backticks, etc. Single-quoted strings
+    // in bash don't expand variables or subshells.
+    const shellEscape = (s: string): string =>
+      "'" + s.replace(/'/g, "'\\''") + "'";
+
     // Dynamic commands that need argument construction
     if (action === "create_repo") {
       const name = (args.name ?? "").replace(/[^a-zA-Z0-9._\-]/g, "");
-      const desc = (args.description ?? "").replace(/"/g, '\\"').slice(0, 200);
+      const desc = (args.description ?? "").slice(0, 200);
       const visibility = args.visibility === "private" ? "--private" : "--public";
       if (!name) return { success: false, output: "", error: "name parameter required for create_repo" };
-      commands.create_repo = `gh repo create "${name}" ${visibility} --description "${desc}" --confirm`;
+      commands.create_repo = `gh repo create ${shellEscape(name)} ${visibility} --description ${shellEscape(desc)} --confirm`;
     }
 
     if (action === "create_issue") {
-      const title = (args.title ?? "").replace(/"/g, '\\"').slice(0, 200);
-      const body = (args.body ?? "").replace(/"/g, '\\"').slice(0, 2000);
+      const title = (args.title ?? "").slice(0, 200);
+      const body = (args.body ?? "").slice(0, 2000);
       if (!title) return { success: false, output: "", error: "title parameter required for create_issue" };
-      commands.create_issue = `gh issue create${repoFlag} --title "${title}" --body "${body}"`;
+      commands.create_issue = `gh issue create${repoFlag} --title ${shellEscape(title)} --body ${shellEscape(body)}`;
     }
 
     if (action === "create_pr") {
-      const title = (args.title ?? "").replace(/"/g, '\\"').slice(0, 200);
-      const body = (args.body ?? "").replace(/"/g, '\\"').slice(0, 2000);
+      const title = (args.title ?? "").slice(0, 200);
+      const body = (args.body ?? "").slice(0, 2000);
       const base = (args.base ?? "main").replace(/[^a-zA-Z0-9._\-/]/g, "");
       if (!title) return { success: false, output: "", error: "title parameter required for create_pr" };
-      commands.create_pr = `gh pr create${repoFlag} --title "${title}" --body "${body}" --base "${base}"`;
+      commands.create_pr = `gh pr create${repoFlag} --title ${shellEscape(title)} --body ${shellEscape(body)} --base ${shellEscape(base)}`;
     }
 
     if (action === "search_code") {
-      const query = (args.query ?? "").replace(/"/g, '\\"').slice(0, 200);
+      const query = (args.query ?? "").slice(0, 200);
       if (!query) return { success: false, output: "", error: "query parameter required for search_code" };
       const repoFilter = safeRepo ? ` repo:${safeRepo}` : "";
-      commands.search_code = `gh search code "${query}${repoFilter}" --limit ${safeLimit} --json path,repository,textMatches`;
+      commands.search_code = `gh search code ${shellEscape(query + repoFilter)} --limit ${safeLimit} --json path,repository,textMatches`;
     }
 
     if (action === "clone") {
       if (!safeRepo) return { success: false, output: "", error: "repo parameter required for clone (owner/name)" };
-      commands.clone = `gh repo clone "${safeRepo}"`;
+      commands.clone = `gh repo clone ${shellEscape(safeRepo)}`;
     }
 
     const cmd = commands[action];
@@ -549,8 +555,8 @@ export class ToolRegistry {
     this.register({
       name: googleDriveTool.name,
       description: googleDriveTool.description,
-      async execute(args: Record<string, string>, _taskId: string, _guard: SecurityGuard): Promise<ToolResult> {
-        return googleDriveTool.execute(args);
+      async execute(args: Record<string, string>, taskId: string, guard: SecurityGuard): Promise<ToolResult> {
+        return googleDriveTool.execute(args, taskId, guard as { authorize: (taskId: string, action: unknown, details: string) => Promise<boolean> });
       },
     });
   }
@@ -575,7 +581,15 @@ export class ToolRegistry {
     if (!tool) return { success: false, output: "", error: `Unknown tool: ${name}` };
 
     // SECURITY: SEC-06 — SSRF check for URL-accepting tools
-    if ((name === "web_fetch" || name === "browser" || name === "download_file") && args.url && !args.url.includes("googleapis.com") && !args.url.includes("accounts.google.com")) {
+    // Use proper URL hostname parsing to prevent bypass via query string
+    const isGoogleApi = (url: string): boolean => {
+      try {
+        const hostname = new URL(url).hostname.toLowerCase();
+        return hostname.endsWith(".googleapis.com") || hostname === "googleapis.com"
+          || hostname === "accounts.google.com";
+      } catch { return false; }
+    };
+    if ((name === "web_fetch" || name === "browser" || name === "download_file") && args.url && !isGoogleApi(args.url)) {
       const urlCheck = validateUrl(args.url);
       if (!urlCheck.valid) {
         logger.warn("ToolGuard: URL blocked", { tool: name, url: args.url, reason: urlCheck.reason, taskId });

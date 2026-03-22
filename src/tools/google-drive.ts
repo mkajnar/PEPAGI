@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { Logger } from "../core/logger.js";
 import { isGoogleAuthenticated, googleFetch } from "../integrations/google-auth.js";
+import { validatePath, PathSecurityError } from "../security/path-validator.js";
 
 const logger = new Logger("GoogleDrive");
 
@@ -121,8 +122,16 @@ async function driveUpload(params: Record<string, string>): Promise<{ success: b
 
   let fileData: Buffer | string;
   if (filePath) {
-    if (!existsSync(filePath)) return { success: false, output: `File not found: ${filePath}` };
-    fileData = await readFile(filePath);
+    // SECURITY: Validate path to prevent data exfiltration via Drive upload
+    let safePath: string;
+    try {
+      safePath = await validatePath(filePath, "google_drive_upload");
+    } catch (err) {
+      if (err instanceof PathSecurityError) return { success: false, output: `Access denied: ${err.message}` };
+      throw err;
+    }
+    if (!existsSync(safePath)) return { success: false, output: `File not found: ${safePath}` };
+    fileData = await readFile(safePath);
   } else if (content) {
     fileData = content;
   } else {
@@ -251,13 +260,23 @@ export const googleDriveTool = {
     { name: "orderBy", type: "string" as const, description: "Order for list (default: modifiedTime desc)", required: false },
   ],
 
-  execute: async (params: Record<string, string>): Promise<{ success: boolean; output: string }> => {
+  execute: async (
+    params: Record<string, string>,
+    _taskId?: string,
+    guard?: { authorize: (taskId: string, action: unknown, details: string) => Promise<boolean> },
+  ): Promise<{ success: boolean; output: string }> => {
     const action = params.action ?? "";
     if (!action) return { success: false, output: "action parameter required" };
 
     const hasOAuth = await isGoogleAuthenticated();
     if (!hasOAuth) {
       return { success: false, output: "Google Drive requires OAuth2 authentication. Run setup to configure Google OAuth." };
+    }
+
+    // Security: share requires network_external authorization
+    if (action === "share" && guard) {
+      const allowed = await guard.authorize(_taskId ?? "drive", "network_external", `drive:share:${params.email ?? ""}`);
+      if (!allowed) return { success: false, output: "Share not authorized by security policy" };
     }
 
     try {

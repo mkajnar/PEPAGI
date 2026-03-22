@@ -28,6 +28,21 @@ vi.mock("../../integrations/google-auth.js", () => ({
   }),
 }));
 
+vi.mock("../../security/path-validator.js", () => ({
+  validatePath: vi.fn(async (p: string) => p),
+  PathSecurityError: class PathSecurityError extends Error {
+    rawPath: string;
+    resolvedPath: string;
+    toolName: string;
+    constructor(message: string, rawPath: string, resolvedPath: string, toolName: string) {
+      super(message);
+      this.rawPath = rawPath;
+      this.resolvedPath = resolvedPath;
+      this.toolName = toolName;
+    }
+  },
+}));
+
 import { googleDriveTool } from "../google-drive.js";
 
 describe("Google Drive Tool", () => {

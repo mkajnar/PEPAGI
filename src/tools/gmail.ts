@@ -9,16 +9,50 @@ import { promisify } from "node:util";
 import { Logger } from "../core/logger.js";
 import { eventBus } from "../core/event-bus.js";
 import { isGoogleAuthenticated, googleFetch } from "../integrations/google-auth.js";
+import { dlpEngine } from "../security/dlp-engine.js";
 
 const logger = new Logger("Gmail");
 const execAsync = promisify(exec);
 const IS_MAC = process.platform === "darwin";
 
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
-// Rate limiter: max 20 sends/hour
+// Rate limiter: max 20 sends/hour — persisted to disk across restarts
 const SEC_MAX_SENDS_PER_HOUR = 20;
-const sendTimestamps: number[] = [];
+const PEPAGI_DATA_DIR = process.env.PEPAGI_DATA_DIR ?? join(homedir(), ".pepagi");
+const RATE_LIMIT_PATH = join(PEPAGI_DATA_DIR, "gmail-rate-limit.json");
+
+let sendTimestamps: number[] = [];
+
+/** Load rate limit state from disk */
+function loadRateLimit(): void {
+  try {
+    const raw = readFileSync(RATE_LIMIT_PATH, "utf8");
+    const data = JSON.parse(raw) as number[];
+    if (Array.isArray(data)) {
+      sendTimestamps = data.filter(ts => typeof ts === "number" && ts > Date.now() - 3_600_000);
+    }
+  } catch {
+    sendTimestamps = [];
+  }
+}
+
+/** Save rate limit state to disk */
+function saveRateLimit(): void {
+  try {
+    mkdirSync(PEPAGI_DATA_DIR, { recursive: true });
+    writeFileSync(RATE_LIMIT_PATH, JSON.stringify(sendTimestamps), "utf8");
+  } catch {
+    // Non-critical — in-memory fallback
+  }
+}
+
+// Load on module init
+loadRateLimit();
 
 function isSendRateLimited(): boolean {
   const now = Date.now();
@@ -31,6 +65,7 @@ function isSendRateLimited(): boolean {
 
 function recordSend(): void {
   sendTimestamps.push(Date.now());
+  saveRateLimit();
 }
 
 /** Base64url encode a string */
@@ -225,6 +260,15 @@ async function gmailSend(params: Record<string, string>): Promise<{ success: boo
     return { success: false, output: "Rate limit: max 20 emails per hour" };
   }
 
+  // SECURITY: DLP check — scan email content for sensitive data leakage
+  const emailContent = `${to} ${subject} ${body}`;
+  const dlpResult = dlpEngine.inspect(emailContent, `mailto:${to}`);
+  if (!dlpResult.allowed) {
+    logger.warn("DLP blocked email send", { to, issues: dlpResult.issues });
+    eventBus.emit({ type: "security:blocked", taskId: "gmail", reason: `DLP: ${dlpResult.issues.join(", ")}` });
+    return { success: false, output: `Email blocked by DLP: ${dlpResult.issues.join(", ")}` };
+  }
+
   const raw = buildRawMessage(to, subject, body);
   const res = await googleFetch(`${GMAIL_API}/messages/send`, {
     method: "POST",
@@ -245,6 +289,13 @@ async function gmailReply(params: Record<string, string>): Promise<{ success: bo
 
   if (isSendRateLimited()) {
     return { success: false, output: "Rate limit: max 20 emails per hour" };
+  }
+
+  // SECURITY: DLP check on reply body
+  const dlpResult = dlpEngine.inspect(body, "gmail:reply");
+  if (!dlpResult.allowed) {
+    logger.warn("DLP blocked email reply", { messageId, issues: dlpResult.issues });
+    return { success: false, output: `Reply blocked by DLP: ${dlpResult.issues.join(", ")}` };
   }
 
   // Fetch original message for headers

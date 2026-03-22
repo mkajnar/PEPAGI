@@ -7,6 +7,7 @@
 import { readFile, writeFile, rename, chmod, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { Logger } from "../core/logger.js";
@@ -189,7 +190,8 @@ export async function startGoogleAuth(
   }
 
   const redirectUri = `http://localhost:${OAUTH_CALLBACK_PORT}/callback`;
-  const state = Math.random().toString(36).slice(2);
+  // SECURITY: Use cryptographically secure random for CSRF state
+  const state = randomBytes(32).toString("hex");
 
   const params = new URLSearchParams({
     client_id: clientId,

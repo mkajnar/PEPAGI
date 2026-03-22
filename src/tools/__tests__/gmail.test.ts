@@ -28,6 +28,12 @@ vi.mock("../../integrations/google-auth.js", () => ({
   }),
 }));
 
+vi.mock("../../security/dlp-engine.js", () => ({
+  dlpEngine: {
+    inspect: vi.fn(() => ({ allowed: true, issues: [], riskLevel: "none" })),
+  },
+}));
+
 import { gmailTool } from "../gmail.js";
 
 describe("Gmail Tool", () => {
